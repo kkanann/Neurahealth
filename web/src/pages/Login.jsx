@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import Navbar from '../components/Navbar';
 
@@ -9,7 +9,7 @@ const Login = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  
+
   const { login } = useAuth();
   const navigate = useNavigate();
 
@@ -22,8 +22,22 @@ const Login = () => {
       // Redirect based on role (Mock logic for now, real app would check DB)
       navigate(isDoctor ? '/doctor' : '/patient');
     } catch (err) {
-      setError('Failed to log in. Please check your credentials.');
-      console.error(err);
+      console.error('Login error:', err);
+
+      // Handle specific Firebase errors
+      if (err.code === 'auth/user-not-found') {
+        setError('No account found with this email. Please sign up.');
+      } else if (err.code === 'auth/wrong-password') {
+        setError('Incorrect password. Please try again.');
+      } else if (err.code === 'auth/invalid-email') {
+        setError('Invalid email address.');
+      } else if (err.code === 'auth/user-disabled') {
+        setError('This account has been disabled.');
+      } else if (err.code === 'auth/invalid-credential') {
+        setError('Invalid credentials. Please check your email and password.');
+      } else {
+        setError('Failed to log in. Please try again.');
+      }
     }
     setLoading(false);
   };
@@ -41,13 +55,13 @@ const Login = () => {
           </div>
 
           <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '4px', borderRadius: '8px', marginBottom: '2rem' }}>
-            <button 
+            <button
               onClick={() => setIsDoctor(false)}
-              style={{ 
-                flex: 1, 
-                padding: '8px', 
-                border: 'none', 
-                background: !isDoctor ? 'var(--color-primary)' : 'transparent', 
+              style={{
+                flex: 1,
+                padding: '8px',
+                border: 'none',
+                background: !isDoctor ? 'var(--color-primary)' : 'transparent',
                 color: !isDoctor ? 'white' : 'var(--color-text-muted)',
                 borderRadius: '6px',
                 cursor: 'pointer',
@@ -56,13 +70,13 @@ const Login = () => {
             >
               Patient
             </button>
-            <button 
+            <button
               onClick={() => setIsDoctor(true)}
-              style={{ 
-                flex: 1, 
-                padding: '8px', 
-                border: 'none', 
-                background: isDoctor ? 'var(--color-primary)' : 'transparent', 
+              style={{
+                flex: 1,
+                padding: '8px',
+                border: 'none',
+                background: isDoctor ? 'var(--color-primary)' : 'transparent',
                 color: isDoctor ? 'white' : 'var(--color-text-muted)',
                 borderRadius: '6px',
                 cursor: 'pointer',
@@ -78,16 +92,16 @@ const Login = () => {
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div>
               <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--color-text-muted)' }}>Email Address</label>
-              <input 
-                type="email" 
-                required 
+              <input
+                type="email"
+                required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                style={{ 
-                  width: '100%', 
-                  padding: '0.8rem', 
-                  background: 'rgba(255,255,255,0.05)', 
-                  border: '1px solid var(--color-glass-border)', 
+                style={{
+                  width: '100%',
+                  padding: '0.8rem',
+                  background: 'rgba(255,255,255,0.05)',
+                  border: '1px solid var(--color-glass-border)',
                   borderRadius: '8px',
                   color: 'white',
                   outline: 'none',
@@ -96,19 +110,19 @@ const Login = () => {
                 placeholder="you@example.com"
               />
             </div>
-            
+
             <div>
-               <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--color-text-muted)' }}>Password</label>
-              <input 
-                type="password" 
-                required 
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--color-text-muted)' }}>Password</label>
+              <input
+                type="password"
+                required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                style={{ 
-                  width: '100%', 
-                  padding: '0.8rem', 
-                  background: 'rgba(255,255,255,0.05)', 
-                  border: '1px solid var(--color-glass-border)', 
+                style={{
+                  width: '100%',
+                  padding: '0.8rem',
+                  background: 'rgba(255,255,255,0.05)',
+                  border: '1px solid var(--color-glass-border)',
                   borderRadius: '8px',
                   color: 'white',
                   outline: 'none',
@@ -118,8 +132,8 @@ const Login = () => {
               />
             </div>
 
-            <button 
-              type="submit" 
+            <button
+              type="submit"
               disabled={loading}
               className="btn-primary"
               style={{ marginTop: '1rem', width: '100%' }}
@@ -129,7 +143,7 @@ const Login = () => {
           </form>
 
           <div style={{ marginTop: '1.5rem', textAlign: 'center', fontSize: '0.9rem', color: 'var(--color-text-muted)' }}>
-            Don't have an account? <a href="#" style={{ color: 'var(--color-primary)' }}>Sign up</a>
+            Don't have an account? <Link to="/signup" style={{ color: 'var(--color-primary)', textDecoration: 'none' }}>Sign up</Link>
           </div>
         </div>
       </div>
