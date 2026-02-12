@@ -132,12 +132,68 @@ export const getUserLocation = async () => {
     });
 };
 
-// Search nearby hospitals using OpenStreetMap Nominatim API
-export const searchNearbyHospitals = async (latitude, longitude, radius = 5000) => {
+// Geocode city name to coordinates
+export const geocodeCityName = async (cityName) => {
     try {
-        // Using Overpass API for OpenStreetMap data
-        const query = `
-      [out:json][timeout:25];
+        console.log(`🌍 Geocoding city: "${cityName}"...`);
+
+        const response = await fetch(
+            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(cityName)}&limit=1`,
+            {
+                headers: {
+                    'User-Agent': 'NeuraHealth/1.0'
+                }
+            }
+        );
+
+        if (!response.ok) {
+            throw new Error('Failed to geocode city name');
+        }
+
+        const data = await response.json();
+
+        if (data.length === 0) {
+            throw new Error(`Could not find location for "${cityName}". Please check the spelling and try again.`);
+        }
+
+        const location = data[0];
+        console.log(`✅ Found: ${location.display_name}`);
+
+        return {
+            latitude: parseFloat(location.lat),
+            longitude: parseFloat(location.lon),
+            displayName: location.display_name,
+            city: cityName
+        };
+
+    } catch (error) {
+        console.error('❌ Geocoding error:', error);
+        throw error;
+    }
+};
+
+// Search nearby hospitals using OpenStreetMap with fallback
+export const searchNearbyHospitals = async (latitude, longitude, radius = 15000) => {
+    // Try Overpass API first with retry logic
+    try {
+        return await searchWithOverpass(latitude, longitude, radius);
+    } catch (overpassError) {
+        console.warn('⚠️ Overpass API failed, trying Nominatim fallback...', overpassError.message);
+
+        // Fallback to Nominatim search
+        try {
+            return await searchWithNominatim(latitude, longitude, radius);
+        } catch (nominatimError) {
+            console.error('❌ Both APIs failed:', { overpassError, nominatimError });
+            throw new Error('Unable to search hospitals. The mapping services are currently unavailable. Please try again later.');
+        }
+    }
+};
+
+// Primary: Overpass API with retry logic
+const searchWithOverpass = async (latitude, longitude, radius, retries = 2) => {
+    const query = `
+      [out:json][timeout:15];
       (
         node["amenity"="hospital"](around:${radius},${latitude},${longitude});
         way["amenity"="hospital"](around:${radius},${latitude},${longitude});
@@ -149,49 +205,127 @@ export const searchNearbyHospitals = async (latitude, longitude, radius = 5000) 
       out skel qt;
     `;
 
-        const response = await fetch('https://overpass-api.de/api/interpreter', {
-            method: 'POST',
-            body: query,
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded'
-            }
-        });
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            console.log(`🔍 Overpass API attempt ${attempt + 1}/${retries + 1}...`);
 
-        if (!response.ok) {
-            throw new Error('Failed to fetch nearby hospitals');
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+
+            const response = await fetch('https://overpass-api.de/api/interpreter', {
+                method: 'POST',
+                body: query,
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            const data = await response.json();
+
+            // Process and format results
+            const facilities = data.elements
+                .filter(element => element.tags && element.tags.name)
+                .map(element => {
+                    const distance = calculateDistance(
+                        latitude,
+                        longitude,
+                        element.lat || element.center?.lat,
+                        element.lon || element.center?.lon
+                    );
+
+                    return {
+                        name: element.tags.name,
+                        type: element.tags.amenity === 'hospital' ? 'Hospital' : 'Clinic',
+                        address: formatAddress(element.tags),
+                        phone: element.tags.phone || 'N/A',
+                        emergency: element.tags.emergency === 'yes',
+                        distance: distance,
+                        latitude: element.lat || element.center?.lat,
+                        longitude: element.lon || element.center?.lon
+                    };
+                })
+                .sort((a, b) => a.distance - b.distance)
+                .slice(0, 10);
+
+            console.log(`✅ Overpass API returned ${facilities.length} facilities`);
+            return facilities;
+
+        } catch (error) {
+            console.error(`❌ Overpass attempt ${attempt + 1} failed:`, error.message);
+
+            if (attempt === retries) {
+                throw error; // Last attempt failed
+            }
+
+            // Wait before retry (exponential backoff)
+            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+        }
+    }
+};
+
+// Fallback: Nominatim search API
+const searchWithNominatim = async (latitude, longitude, radius) => {
+    try {
+        console.log('🔍 Searching with Nominatim API...');
+
+        const radiusKm = radius / 1000;
+
+        // Search for hospitals
+        const hospitalResponse = await fetch(
+            `https://nominatim.openstreetmap.org/search?format=json&q=hospital&limit=20&bounded=1&viewbox=${longitude - 0.05},${latitude + 0.05},${longitude + 0.05},${latitude - 0.05}`,
+            {
+                headers: {
+                    'User-Agent': 'NeuraHealth/1.0'
+                }
+            }
+        );
+
+        if (!hospitalResponse.ok) {
+            throw new Error('Nominatim API request failed');
         }
 
-        const data = await response.json();
+        const hospitals = await hospitalResponse.json();
 
-        // Process and format results
-        const facilities = data.elements
-            .filter(element => element.tags && element.tags.name)
-            .map(element => {
+        // Process results
+        const facilities = hospitals
+            .map(place => {
                 const distance = calculateDistance(
                     latitude,
                     longitude,
-                    element.lat || element.center?.lat,
-                    element.lon || element.center?.lon
+                    parseFloat(place.lat),
+                    parseFloat(place.lon)
                 );
 
+                // Only include facilities within radius
+                if (distance > radiusKm) return null;
+
                 return {
-                    name: element.tags.name,
-                    type: element.tags.amenity === 'hospital' ? 'Hospital' : 'Clinic',
-                    address: formatAddress(element.tags),
-                    phone: element.tags.phone || 'N/A',
-                    emergency: element.tags.emergency === 'yes',
+                    name: place.display_name.split(',')[0],
+                    type: place.type === 'hospital' ? 'Hospital' : 'Clinic',
+                    address: place.display_name,
+                    phone: 'N/A',
+                    emergency: false,
                     distance: distance,
-                    latitude: element.lat || element.center?.lat,
-                    longitude: element.lon || element.center?.lon
+                    latitude: parseFloat(place.lat),
+                    longitude: parseFloat(place.lon)
                 };
             })
+            .filter(facility => facility !== null)
             .sort((a, b) => a.distance - b.distance)
-            .slice(0, 10); // Return top 10 closest
+            .slice(0, 10);
 
+        console.log(`✅ Nominatim returned ${facilities.length} facilities`);
         return facilities;
 
     } catch (error) {
-        console.error('Error searching hospitals:', error);
+        console.error('❌ Nominatim search failed:', error);
         throw error;
     }
 };

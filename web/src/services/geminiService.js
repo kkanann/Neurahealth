@@ -1,6 +1,6 @@
 // Gemini AI Service for Health Assistant
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
 const HEALTH_ASSISTANT_PROMPT = `You are NeuraHealth AI Assistant, a helpful and empathetic medical information assistant. Your role is to:
 
@@ -72,22 +72,28 @@ export const sendMessageToGemini = async (message, conversationHistory = []) => 
             })
         });
 
+        console.log('📤 Sending request to Gemini API...');
+
         if (!response.ok) {
             const errorData = await response.json();
+            console.error('❌ Gemini API Error Response:', errorData);
             throw new Error(errorData.error?.message || 'Failed to get response from Gemini AI');
         }
 
         const data = await response.json();
+        console.log('📥 Gemini API Response:', data);
 
         if (!data.candidates || data.candidates.length === 0) {
+            console.error('❌ No candidates in response:', data);
             throw new Error('No response generated from Gemini AI');
         }
 
         const aiResponse = data.candidates[0].content.parts[0].text;
+        console.log('✅ AI Response extracted:', aiResponse.substring(0, 100) + '...');
         return aiResponse;
 
     } catch (error) {
-        console.error('Gemini API Error:', error);
+        console.error('❌ Gemini API Error:', error);
         throw error;
     }
 };
@@ -114,4 +120,30 @@ export const isEmergencyRequest = (message) => {
 
     const lowerMessage = message.toLowerCase();
     return emergencyKeywords.some(keyword => lowerMessage.includes(keyword));
+};
+
+// Extract city name from location request
+export const extractCityFromMessage = (message) => {
+    const lowerMessage = message.toLowerCase();
+
+    // Patterns to match city names
+    const patterns = [
+        /(?:in|near|around)\s+([a-z\s]+?)(?:\s|$|,)/i,  // "in bhopal", "near delhi"
+        /(?:hospitals?|doctors?|clinics?)\s+(?:in|at|near)\s+([a-z\s]+?)(?:\s|$|,)/i,  // "hospitals in mumbai"
+        /find\s+(?:hospitals?|doctors?|clinics?)\s+([a-z\s]+?)(?:\s|$|,)/i  // "find hospitals bhopal"
+    ];
+
+    for (const pattern of patterns) {
+        const match = message.match(pattern);
+        if (match && match[1]) {
+            const cityName = match[1].trim();
+            // Filter out common words that aren't cities
+            const excludeWords = ['me', 'my', 'area', 'location', 'nearby', 'closest', 'the', 'a', 'an'];
+            if (!excludeWords.includes(cityName.toLowerCase()) && cityName.length > 2) {
+                return cityName;
+            }
+        }
+    }
+
+    return null;
 };

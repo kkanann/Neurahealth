@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { sendMessageToGemini, isLocationRequest, isEmergencyRequest } from '../services/geminiService';
-import { getUserLocation, searchNearbyHospitals, getEmergencyHelplines, getLocationName } from '../services/locationService';
+import { sendMessageToGemini, isLocationRequest, isEmergencyRequest, extractCityFromMessage } from '../services/geminiService';
+import { getUserLocation, searchNearbyHospitals, getEmergencyHelplines, getLocationName, geocodeCityName } from '../services/locationService';
 
 const HealthAssistant = () => {
     const [messages, setMessages] = useState([
@@ -80,36 +80,78 @@ const HealthAssistant = () => {
 
     const handleLocationRequest = async (userMessage) => {
         try {
-            // Add status message
-            const statusMessage = {
-                role: 'assistant',
-                content: '📍 Requesting your location... Please allow location access if prompted.',
-                timestamp: new Date(),
-                isStatus: true
-            };
-            setMessages(prev => [...prev, statusMessage]);
+            // Check if user mentioned a specific city
+            const cityName = extractCityFromMessage(userMessage);
 
-            // Get user location
-            const location = await getUserLocation();
+            let location;
+            let locationName;
 
-            // Update status
+            if (cityName) {
+                // City-based search
+                const statusMessage = {
+                    role: 'assistant',
+                    content: `🌍 Searching for hospitals in ${cityName}...`,
+                    timestamp: new Date(),
+                    isStatus: true
+                };
+                setMessages(prev => [...prev, statusMessage]);
+
+                // Geocode the city name
+                location = await geocodeCityName(cityName);
+                locationName = {
+                    city: cityName,
+                    state: '',
+                    country: '',
+                    displayName: location.displayName
+                };
+            } else {
+                // GPS-based search
+                const statusMessage = {
+                    role: 'assistant',
+                    content: '📍 Requesting your location... Please allow location access if prompted.',
+                    timestamp: new Date(),
+                    isStatus: true
+                };
+                setMessages(prev => [...prev, statusMessage]);
+
+                // Get user location
+                location = await getUserLocation();
+
+                // Update status
+                setMessages(prev => prev.map((msg, idx) =>
+                    idx === prev.length - 1 && msg.isStatus
+                        ? { ...msg, content: '🔍 Location acquired! Searching for nearby hospitals...' }
+                        : msg
+                ));
+
+                locationName = await getLocationName(location.latitude, location.longitude);
+            }
+
+            // Update status for hospital search
             setMessages(prev => prev.map((msg, idx) =>
                 idx === prev.length - 1 && msg.isStatus
-                    ? { ...msg, content: '🔍 Location acquired! Searching for nearby hospitals...' }
+                    ? { ...msg, content: '🔍 Searching for nearby hospitals...' }
                     : msg
             ));
-
-            const locationName = await getLocationName(location.latitude, location.longitude);
 
             // Search nearby hospitals
             const hospitals = await searchNearbyHospitals(location.latitude, location.longitude);
 
-            let responseContent = `📍 **Your Location**: ${locationName.city}, ${locationName.state}\n\n`;
+            // Format location display
+            const locationDisplay = cityName
+                ? cityName.charAt(0).toUpperCase() + cityName.slice(1)  // Capitalize city name
+                : `${locationName.city}${locationName.state ? ', ' + locationName.state : ''}`;
+
+            let responseContent = `📍 **Location**: ${locationDisplay}\n\n`;
 
             if (hospitals.length === 0) {
-                responseContent += '❌ No hospitals found nearby. Try expanding your search radius or check your location settings.';
+                responseContent += '❌ No hospitals found in this area.\n\n';
+                responseContent += '**Try:**\n';
+                responseContent += '• Searching for a nearby major city\n';
+                responseContent += '• Using "Emergency helplines" for immediate assistance\n';
+                responseContent += '• Checking Google Maps manually';
             } else {
-                responseContent += `🏥 **Found ${hospitals.length} healthcare facilities near you:**\n\n`;
+                responseContent += `🏥 **Found ${hospitals.length} healthcare facilities:**\n\n`;
 
                 hospitals.forEach((hospital, index) => {
                     responseContent += `**${index + 1}. ${hospital.name}**\n`;
@@ -141,16 +183,34 @@ const HealthAssistant = () => {
         } catch (err) {
             console.error('Location error:', err);
 
-            // Build helpful error message with troubleshooting steps
-            let troubleshootingSteps = '\n\n**Troubleshooting Steps:**\n';
-            troubleshootingSteps += '1. Check browser location permissions (click the lock icon in address bar)\n';
-            troubleshootingSteps += '2. Enable location services in your system settings\n';
-            troubleshootingSteps += '3. Try refreshing the page (Ctrl+Shift+R)\n';
-            troubleshootingSteps += '4. Check the browser console (F12) for detailed error messages';
+            // Build helpful error message based on error type
+            let errorContent = `⚠️ **Unable to Find Nearby Hospitals**\n\n`;
+
+            if (err.message.includes('mapping services are currently unavailable')) {
+                errorContent += '🔧 **Service Temporarily Unavailable**\n\n';
+                errorContent += 'The hospital mapping services are experiencing high traffic or maintenance.\n\n';
+                errorContent += '**What you can do:**\n';
+                errorContent += '• Try again in a few minutes\n';
+                errorContent += '• Use the "Emergency helplines" button for immediate assistance\n';
+                errorContent += '• Search manually on Google Maps for "hospitals near me"\n';
+            } else if (err.message.includes('permission') || err.message.includes('denied')) {
+                errorContent += '🔒 **Location Permission Required**\n\n';
+                errorContent += err.message + '\n\n';
+                errorContent += '**How to enable location:**\n';
+                errorContent += '1. Click the lock icon 🔒 in your browser address bar\n';
+                errorContent += '2. Set "Location" to "Allow"\n';
+                errorContent += '3. Refresh the page and try again\n';
+            } else {
+                errorContent += err.message + '\n\n';
+                errorContent += '**Troubleshooting:**\n';
+                errorContent += '• Check your internet connection\n';
+                errorContent += '• Enable location services in system settings\n';
+                errorContent += '• Try refreshing the page (Ctrl+Shift+R)\n';
+            }
 
             const errorMessage = {
                 role: 'assistant',
-                content: `⚠️ **Location Error**\n\n${err.message}${troubleshootingSteps}`,
+                content: errorContent,
                 timestamp: new Date(),
                 isError: true
             };
